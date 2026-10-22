@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#173b35">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ruhsat Takip Pro">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="styles.css">
+<title>Ruhsat Takip Pro</title>
+</head>
+<body>
+<header class="topbar">
+  <div class="brandmark">RT</div>
+  <div class="brand"><strong>Ruhsat Takip Pro</strong><small>Menderes · Dosya yönetimi</small></div>
+  <button id="accountBtn" class="icon-btn" aria-label="Hesap">☻</button>
+</header>
+
+<section id="authPanel" class="auth-panel card">
+  <h2>Güvenli bulut hesabı</h2>
+  <p id="authMessage">Bulut eşitlemesini etkinleştirmek için Supabase bağlantısını kurup hesabınla giriş yap. Kurulum tamamlanana kadar demo verileri yalnızca bu cihazda tutulur.</p>
+  <div id="configForm">
+    <label>Supabase Project URL<input id="supabaseUrl" placeholder="https://proje-kimligi.supabase.co" autocomplete="url"></label>
+    <label>Supabase publishable / anon key<input id="supabaseKey" placeholder="sb_publishable_… veya anon key" autocomplete="off"></label>
+    <button id="saveConfig" class="primary">Bağlantı ayarlarını kaydet</button>
+  </div>
+  <div id="loginForm" hidden>
+    <label>E-posta<input id="email" type="email" placeholder="ornek@eposta.com" autocomplete="email"></label>
+    <label>Şifre<input id="password" type="password" placeholder="En az 8 karakter" autocomplete="current-password"></label>
+    <div class="button-row"><button id="signIn" class="primary">Giriş yap</button><button id="signUp" class="secondary">Hesap oluştur</button></div>
+    <button id="signOut" class="quiet" hidden>Çıkış yap</button>
+  </div>
+  <p id="cloudStatus" class="status">Yerel mod · Bulut henüz bağlı değil</p>
+</section>
+
+<nav class="tabs" aria-label="Ana menü">
+  <button class="tab active" data-tab="home">Özet</button>
+  <button class="tab" data-tab="clients">Müşteriler</button>
+  <button class="tab" data-tab="files">Dosyalar</button>
+  <button class="tab" data-tab="tasks">Hatırlatmalar</button>
+  <button class="tab" data-tab="money">Finans</button>
+</nav>
+
+<main>
+<section id="view-home" class="view">
+  <div class="section-head"><div><p class="eyebrow">GENEL DURUM</p><h1>İşletme özeti</h1></div><button class="primary compact" id="quickAdd">+ Yeni kayıt</button></div>
+  <div class="metric-grid">
+    <article class="metric"><span>Aktif dosyalar</span><strong id="metricActive">0</strong></article>
+    <article class="metric"><span>Eksik evrak</span><strong id="metricMissing">0</strong></article>
+    <article class="metric"><span>Tahsil edilecek</span><strong id="metricDue">0 ₺</strong></article>
+    <article class="metric"><span>Bu ay net kazanç*</span><strong id="metricProfit">0 ₺</strong></article>
+  </div>
+  <div class="card"><div class="section-head"><h2>Yaklaşan hatırlatmalar</h2><button class="text-btn" data-goto="tasks">Tümünü gör</button></div><div id="upcomingList" class="list"></div></div>
+  <div class="card"><div class="section-head"><h2>Son dosyalar</h2><button class="text-btn" data-goto="files">Tümünü gör</button></div><div id="recentFiles" class="list"></div></div>
+  <p class="footnote">* Net kazanç burada kaydedilmiş tahsilatlardan giderler düşülerek hesaplanan yaklaşık işletme sonucudur; kesin vergi hesabı değildir.</p>
+</section>
+
+<section id="view-clients" class="view" hidden>
+  <div class="section-head"><div><p class="eyebrow">İLETİŞİM KAYITLARI</p><h1>Müşteriler</h1></div><button class="primary compact" id="addClientBtn">+ Müşteri</button></div>
+  <input id="clientSearch" class="search" placeholder="Müşteri, telefon veya işletme ara">
+  <div id="clientsList" class="list"></div>
+</section>
+
+<section id="view-files" class="view" hidden>
+  <div class="section-head"><div><p class="eyebrow">BAŞVURU VE EVRAK</p><h1>Ruhsat dosyaları</h1></div><button class="primary compact" id="addFileBtn">+ Dosya</button></div>
+  <input id="fileSearch" class="search" placeholder="Dosya, müşteri veya adres ara">
+  <div class="filter-row"><select id="fileStatusFilter"><option value="">Tüm durumlar</option><option>Yeni başvuru</option><option>Evrak hazırlanıyor</option><option>Eksik evrak</option><option>Belediyede işlemde</option><option>Tamamlandı</option><option>Beklemede</option></select></div>
+  <div id="filesList" class="list"></div>
+</section>
+
+<section id="view-tasks" class="view" hidden>
+  <div class="section-head"><div><p class="eyebrow">TAKVİM VE İŞLER</p><h1>Hatırlatmalar</h1></div><button class="primary compact" id="addTaskBtn">+ Görev</button></div>
+  <div id="tasksList" class="list"></div>
+  <p class="footnote">Bu sürüm görev tarihlerini uygulama içinde gösterir. Gerçek cihaz bildirimi ve arka plan hatırlatması için barındırma/izin ayarları ayrıca doğrulanmalıdır.</p>
+</section>
+
+<section id="view-money" class="view" hidden>
+  <div class="section-head"><div><p class="eyebrow">TAHSİLAT VE GİDER</p><h1>Finans</h1></div><button class="primary compact" id="addMoneyBtn">+ İşlem</button></div>
+  <div class="metric-grid">
+    <article class="metric"><span>Toplam tahsilat</span><strong id="moneyCollected">0 ₺</strong></article>
+    <article class="metric"><span>Toplam gider</span><strong id="moneyExpenses">0 ₺</strong></article>
+    <article class="metric"><span>Kalan alacak</span><strong id="moneyReceivable">0 ₺</strong></article>
+    <article class="metric"><span>Yaklaşık net</span><strong id="moneyNet">0 ₺</strong></article>
+  </div>
+  <div class="card"><h2>Finans işlemleri</h2><div id="transactionsList" class="list"></div></div>
+  <p class="footnote">Vergi karşılığı ayrı bir gider olarak girilebilir. KDV ve gelir vergisi değerlendirmesi için mali müşavirine danış.</p>
+</section>
+</main>
+
+<dialog id="recordDialog">
+  <form id="recordForm" method="dialog">
+    <div class="dialog-head"><h2 id="dialogTitle">Yeni kayıt</h2><button type="button" id="closeDialog" class="icon-btn" aria-label="Kapat">×</button></div>
+    <div id="formFields" class="form-fields"></div>
+    <p id="formError" class="error" hidden></p>
+    <div class="button-row"><button type="button" id="cancelDialog" class="secondary">Vazgeç</button><button type="submit" class="primary">Kaydet</button></div>
+  </form>
+</dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<footer>Ruhsat Takip Pro · İlk sürüm · Verilerini düzenli yedekle</footer>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="app.js"></script>
+</body>
+</html>
