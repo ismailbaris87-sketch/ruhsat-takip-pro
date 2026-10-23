@@ -507,3 +507,10 @@ dialog::backdrop {
 .view:not([hidden]) {
   display: flex;
 }
+.view[hidden] {
+  display: none !important;
+}
+
+.view:not([hidden]) {
+  display: block !important;
+}
