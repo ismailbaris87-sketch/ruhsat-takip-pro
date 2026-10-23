@@ -498,3 +498,12 @@ dialog::backdrop {
 .view[hidden] {
   display: none !important;
 }
+
+/* Sekmelerin görünürlük düzeltmesi */
+.view[hidden] {
+  display: none !important;
+}
+
+.view:not([hidden]) {
+  display: flex;
+}
