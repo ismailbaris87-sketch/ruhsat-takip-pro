@@ -1,5 +1,4 @@
-
-/* Ruhsat Takip Pro — düzeltilmiş sürüm */
+/* Ruhsat Takip Pro — çoklu evrak ekleme ve kayıt düzeltmesi */
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
@@ -310,6 +309,7 @@ function field(label, name, type = "text", value = "", opts = null, required = f
   return `<label>${label}${input}</label>`;
 }
 
+/* Evrak listesi: mevcut evraklar ve yeni evrak ekleme alanı */
 function checklistEditor(items = []) {
   const standard = [
     "Başvuru formu / dilekçe",
@@ -325,16 +325,19 @@ function checklistEditor(items = []) {
 
   return `<div class="checklist-box">
     <strong>Evrak kontrol listesi</strong>
-    ${arr.map((x, i) => `
-      <label class="check-row">
-        <input type="checkbox" name="check_${i}" ${x.done ? "checked" : ""}>
-        <span>${esc(x.title)}</span>
-        <input type="hidden" name="checktitle_${i}" value="${esc(x.title)}">
-      </label>
-    `).join("")}
-    <label>Yeni evrak ekle
-      <input name="newChecklist" placeholder="Örn. İtfaiye raporu">
-    </label>
+    <div class="checklist-items">
+      ${arr.map((x, i) => `
+        <label class="check-row">
+          <input type="checkbox" name="check_${i}" ${x.done ? "checked" : ""}>
+          <input type="hidden" name="checktitle_${i}" value="${esc(x.title)}">
+          <span>${esc(x.title)}</span>
+        </label>
+      `).join("")}
+    </div>
+    <div class="checklist-add">
+      <input type="text" class="new-checklist-title" placeholder="Yeni evrak adını yaz">
+      <button type="button" class="add-checklist-item">+ Listeye ekle</button>
+    </div>
   </div>`;
 }
 
@@ -425,6 +428,59 @@ function openForm(mode, id = null) {
   }
 
   $("#formFields").innerHTML = html;
+
+  /* Yeni evrak ekle düğmesi ve Enter tuşu */
+  const checklistBox = $("#formFields .checklist-box");
+
+  if (checklistBox) {
+    const itemsBox = checklistBox.querySelector(".checklist-items");
+    const titleInput = checklistBox.querySelector(".new-checklist-title");
+    const addButton = checklistBox.querySelector(".add-checklist-item");
+
+    const addChecklistItem = () => {
+      const title = titleInput.value.trim();
+
+      if (!title) {
+        titleInput.focus();
+        return;
+      }
+
+      const index = itemsBox.querySelectorAll(".check-row").length;
+
+      const row = document.createElement("label");
+      row.className = "check-row";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.name = `check_${index}`;
+
+      const hidden = document.createElement("input");
+      hidden.type = "hidden";
+      hidden.name = `checktitle_${index}`;
+      hidden.value = title;
+
+      const span = document.createElement("span");
+      span.textContent = title;
+
+      row.appendChild(checkbox);
+      row.appendChild(hidden);
+      row.appendChild(span);
+      itemsBox.appendChild(row);
+
+      titleInput.value = "";
+      titleInput.focus();
+    };
+
+    addButton.addEventListener("click", addChecklistItem);
+
+    titleInput.addEventListener("keydown", event => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        addChecklistItem();
+      }
+    });
+  }
+
   $("#formError").hidden = true;
   $("#recordDialog").showModal();
 }
@@ -457,21 +513,21 @@ function saveForm(e) {
     if (!data.title?.trim()) return formError("Dosya başlığı gerekli.");
 
     const checklist = [];
+
     const titles = Object.keys(data)
       .filter(k => k.startsWith("checktitle_"))
-      .sort((a, b) => Number(a.split("_")[1]) - Number(b.split("_")[1]));
+      .sort((a, b) =>
+        Number(a.split("_")[1]) - Number(b.split("_")[1])
+      );
 
     titles.forEach(k => {
       const i = k.split("_")[1];
+
       checklist.push({
         title: data[k],
-        done: form.elements["check_" + i]?.checked || false
+        done: form.elements[`check_${i}`]?.checked || false
       });
     });
-
-    if (data.newChecklist?.trim()) {
-      checklist.push({ title: data.newChecklist.trim(), done: false });
-    }
 
     const obj = {
       id,
@@ -536,7 +592,9 @@ function upsert(table, obj) {
     db[table].push(obj);
   }
 
-  if (sessionUser) obj.user_id = sessionUser.id;
+  if (sessionUser) {
+    obj.user_id = sessionUser.id;
+  }
 }
 
 function formError(msg) {
