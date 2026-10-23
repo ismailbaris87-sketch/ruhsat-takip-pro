@@ -495,3 +495,6 @@ dialog::backdrop {
     padding-right: max(18px, calc((100vw - 760px) / 2));
   }
 }
+.view[hidden] {
+  display: none !important;
+}
