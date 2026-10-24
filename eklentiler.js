@@ -1706,3 +1706,220 @@
 })();
 
 
+/* Ruhsat Takip Pro — eklenti 8: kısa dosya kartı, "Bugün" kartı, katlanan hızlı not. */
+(function () {
+  const style = document.createElement("style");
+  style.textContent = `
+    details.fc-more > summary, details.more > summary { list-style: none; cursor: pointer; }
+    details.fc-more > summary::-webkit-details-marker, details.more > summary::-webkit-details-marker { display: none; }
+    details.fc-more > summary { font-size: .85rem; font-weight: 700; color: #315a48; padding: 4px 0; }
+    details.more > summary { display: inline-flex; margin-top: 2px; }
+    details.more .item-actions { margin-top: 6px; }
+    .fc-sec { margin: 10px 0 2px; font-weight: 700; font-size: .85rem; }
+    .fold-sum { font-weight: 800; font-size: 17px; cursor: pointer; padding: 2px 0; }
+    .today-row { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+    .today-main { flex: 1; min-width: 0; }
+  `;
+  document.head.appendChild(style);
+
+  /* ---------- Yardımcılar ---------- */
+  const fmtDate = s => (s ? String(s).slice(0, 10).split("-").reverse().join(".") : "");
+  const sum = (arr, fn) => arr.reduce((a, x) => a + (Number(fn(x)) || 0), 0);
+  const paidFor = f => sum(db.transactions.filter(t => t.kind === "Tahsilat" && t.file_id === f.id), t => t.amount);
+  const leftFor = f => Math.max(0, (Number(f.fee) || 0) - paidFor(f));
+  const missingDocs = f => (f.checklist || []).filter(x => !x.done).map(x => x.title);
+
+  function daysUntil(s) {
+    if (!s) return null;
+    const [y, m, d] = String(s).slice(0, 10).split("-").map(Number);
+    const n = new Date();
+    const diff = Math.round((new Date(y, m - 1, d) - new Date(n.getFullYear(), n.getMonth(), n.getDate())) / 86400000);
+    return Number.isNaN(diff) ? null : diff;
+  }
+
+  function phoneDigits(p) {
+    let d = String(p || "").replace(/\D/g, "");
+    if (!d) return "";
+    if (d.startsWith("00")) d = d.slice(2);
+    else if (d.startsWith("0")) d = "90" + d.slice(1);
+    else if (d.length === 10) d = "90" + d;
+    return d;
+  }
+
+  const wa = (ph, msg) => `https://wa.me/${ph}?text=${encodeURIComponent(msg)}`;
+
+  function waLink(f) {
+    const c = db.clients.find(x => x.id === f.client_id);
+    const ph = phoneDigits(c?.phone);
+    if (!ph) return "";
+
+    const miss = missingDocs(f);
+    const d = daysUntil(f.expiry_date);
+    let msg;
+
+    if (f.status !== "Tamamlandı" && miss.length) {
+      msg = `Merhaba ${c.name}, ${f.title} dosyanız için şu evraklar hâlâ eksik: ${miss.join(", ")}. Hazır olduğunda iletebilir misiniz? Teşekkürler.`;
+    } else if (d !== null && d <= 30) {
+      msg = d < 0
+        ? `Merhaba ${c.name}, ${f.title} ruhsatınızın süresi ${fmtDate(f.expiry_date)} tarihinde doldu. Yenileme için dönüş yapar mısınız?`
+        : `Merhaba ${c.name}, ${f.title} ruhsatınızın süresi ${fmtDate(f.expiry_date)} tarihinde doluyor. Yenileme işlemleri için dönüş yapar mısınız?`;
+    } else {
+      msg = `Merhaba ${c.name}, ${f.title} dosyanızın güncel durumu: ${f.status}.`;
+    }
+
+    return wa(ph, msg);
+  }
+
+  function payLink(f, left) {
+    const c = db.clients.find(x => x.id === f.client_id);
+    const ph = phoneDigits(c?.phone);
+    return ph
+      ? wa(ph, `Merhaba ${c.name}, ${f.title} dosyanız için kalan hizmet bedeli ${money(left)}. Uygun olduğunuzda ödeme yapabilirseniz sevinirim. Teşekkürler.`)
+      : "";
+  }
+
+  /* ---------- Kısa dosya kartı ---------- */
+  const openCards = new Set();
+
+  fileCard = function (f) {
+    const list = f.checklist || [];
+    const done = list.filter(x => x.done).length;
+    const fee = Number(f.fee) || 0;
+    const left = leftFor(f);
+    const d = daysUntil(f.expiry_date);
+    const h = f.history || [];
+    const client = f.client_id ? getClientName(f.client_id) : "";
+    const pill = ["Eksik evrak", "Beklemede"].includes(f.status) ? "warn" : "";
+
+    const line = [
+      f.due_date && "Takip " + fmtDate(f.due_date),
+      list.length && `Evrak ${done}/${list.length}`,
+      fee > 0 && (left > 0 ? `<b>Kalan ${money(left)}</b>` : "Ödendi"),
+      d !== null && d <= 30 && `<b>Ruhsat ${d < 0 ? "süresi doldu" : d + " gün"}</b>`
+    ].filter(Boolean).join(" · ");
+
+    const meta = [
+      f.address,
+      f.parcel && "Ada/parsel " + f.parcel,
+      f.institution && "Kurum: " + f.institution,
+      f.app_no && "Başvuru no: " + f.app_no,
+      f.expiry_date && "Ruhsat bitiş: " + fmtDate(f.expiry_date),
+      f.repeat_years && `Yenileme: ${f.repeat_years} yılda bir`,
+      fee > 0 && `Bedel ${money(fee)} · Tahsil ${money(paidFor(f))}`,
+      f.notes
+    ].filter(Boolean).map(x => `<div class="subline">${esc(x)}</div>`).join("");
+
+    const checks = list.length
+      ? `<div class="fc-sec">Evraklar</div><div class="check-live">${list.map((x, i) =>
+          `<label><input type="checkbox" data-live-check="${f.id}" data-i="${i}" ${x.done ? "checked" : ""}><span>${esc(x.title)}</span></label>`).join("")}</div>`
+      : "";
+
+    const hist = `<div class="fc-sec">Geçmiş (${h.length})</div>
+      ${[...h].reverse().map((e, i) => `<div class="subline">${fmtDate(e.at)} · ${esc(e.text)} <button type="button" class="remove-check" data-hist-del="${f.id}" data-i="${h.length - 1 - i}" aria-label="Sil">×</button></div>`).join("")}
+      <div class="item-actions"><input class="hist-input" placeholder="Not ekle (ör. evrak teslim alındı)"><button type="button" class="small-btn hist-add" data-id="${f.id}">Ekle</button></div>`;
+
+    const waHref = waLink(f);
+    const payHref = left > 0 ? payLink(f, left) : "";
+
+    return `<article class="list-item" data-inst="${esc(f.institution || "")}">
+      <div class="list-top">
+        <div>
+          <div class="list-title">${esc(f.title)}</div>
+          <div class="subline">${esc(f.type || "")}${client ? " · " + esc(client) : ""}</div>
+        </div>
+        <span class="pill ${pill}">${esc(f.status)}</span>
+      </div>
+      ${line ? `<div class="subline">${line}</div>` : ""}
+      <details class="fc-more" data-key="${f.id}" ${openCards.has(f.id) ? "open" : ""}>
+        <summary>Ayrıntılar</summary>${meta}${checks}${hist}
+      </details>
+      <div class="item-actions">
+        <button class="small-btn" data-edit="file" data-id="${f.id}">Aç / düzenle</button>
+        ${waHref ? `<a class="small-btn wa" href="${waHref}" target="_blank" rel="noopener">WhatsApp</a>` : ""}
+      </div>
+      <details class="more"><summary class="small-btn">Daha fazla</summary>
+        <div class="item-actions">
+          <button class="small-btn doc-pdf" data-doc="quote" data-id="${f.id}">Teklif PDF</button>
+          ${payHref ? `<a class="small-btn wa" href="${payHref}" target="_blank" rel="noopener">Ödeme hatırlat</a>` : ""}
+          <button class="small-btn" data-delete="file" data-id="${f.id}">Sil</button>
+        </div>
+      </details>
+    </article>`;
+  };
+
+  document.addEventListener("toggle", e => {
+    const el = e.target;
+    if (el.matches?.("details.fc-more")) {
+      if (el.open) openCards.add(el.dataset.key);
+      else openCards.delete(el.dataset.key);
+    }
+  }, true);
+
+  /* ---------- Hızlı not: katlanır ---------- */
+  function foldNote() {
+    const c = $("#noteCard");
+    if (!c || c.dataset.fold) return;
+    c.dataset.fold = "1";
+    c.querySelector("h2")?.remove();
+
+    const det = document.createElement("details");
+    const sum = document.createElement("summary");
+    sum.className = "fold-sum";
+    sum.textContent = "Hızlı not ekle";
+
+    while (c.firstChild) det.appendChild(c.firstChild);
+    det.prepend(sum);
+    c.appendChild(det);
+  }
+
+  /* ---------- Özet: tek "Bugün" kartı ---------- */
+  function renderToday() {
+    const grid = $("#view-home .metric-grid");
+    if (!grid) return;
+
+    let card = $("#todayCard");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "todayCard";
+      card.className = "card";
+      grid.after(card);
+    }
+
+    const arts = $$("#autoAlertsTasks article, #autoAlerts2Tasks article, #renewBox article");
+    ["#autoAlertsHome", "#autoAlerts2Home", "#renewBox"].forEach(s => { if ($(s)) $(s).style.display = "none"; });
+
+    if (!arts.length) {
+      card.style.display = "none";
+      return;
+    }
+
+    const rows = arts.map(a => {
+      const p = a.querySelector(".pill");
+      const btn = a.querySelector(".item-actions button");
+      const cls = p ? [...p.classList].filter(c => c === "warn" || c === "danger").join(" ") : "";
+      const text = [...a.querySelectorAll(".subline")].pop()?.textContent || "";
+
+      return `<div class="today-row">
+        <span class="pill ${cls}">${esc(p?.textContent || "Yenileme")}</span>
+        <div class="today-main"><b>${esc(a.querySelector(".list-title")?.textContent || "")}</b><div class="subline">${esc(text)}</div></div>
+        ${btn ? btn.outerHTML : ""}
+      </div>`;
+    });
+
+    card.style.display = "";
+    card.innerHTML = `<div class="section-head"><h2>Bugün</h2>${
+      rows.length > 4 ? `<button class="text-btn auto-goto">Tümü (${rows.length})</button>` : ""
+    }</div>${rows.slice(0, 4).join("")}`;
+  }
+
+  const _render = render;
+  render = function () {
+    _render();
+    foldNote();
+    renderToday();
+  };
+
+  render();
+})();
+
+
