@@ -513,4 +513,18 @@ dialog::backdrop {
 
 .view:not([hidden]) {
   display: block !important;
+  /* Düzeltme: sekme görünümü ve taşma */
+.view:not([hidden]) {
+  display: flex !important;
+  flex-direction: column;
+  gap: 14px;
+}
+html, body {
+  overflow-x: hidden;
+}
+main, .view > *, .card, .metric-grid, .list, .list-item {
+  min-width: 0;
+  max-width: 100%;
+}
+
 }
