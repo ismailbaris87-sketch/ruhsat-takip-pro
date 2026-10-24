@@ -1034,6 +1034,17 @@
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
+  function addToCalendar() {
+    const ev = calEvents();
+    if (!ev.length) { toast("Aktarılacak yaklaşan tarih yok."); return; }
+
+    const a = document.createElement("a");
+    a.href = "data:text/calendar;charset=utf-8," + encodeURIComponent(buildIcs(ev));
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   function mountCalendarCard() {
     if ($("#calCard")) return;
     const view = $("#view-tasks");
@@ -1044,13 +1055,14 @@
     card.className = "card";
     card.innerHTML = `<h2>Takvime aktar</h2>
       <p id="calInfo" class="subline"></p>
-      <div class="item-actions"><button type="button" class="small-btn" id="calExport">Takvime aktar</button></div>`;
+      <div class="item-actions"><button type="button" class="small-btn" id="calAdd">Takvime ekle</button><button type="button" class="small-btn" id="calExport">Dosya olarak paylaş</button></div>`;
 
     const note = view.querySelector(".footnote");
     if (note) note.before(card);
     else view.appendChild(card);
 
     $("#calExport").addEventListener("click", exportCalendar);
+    $("#calAdd").addEventListener("click", addToCalendar);
   }
 
   /* ---------- Teklif ve makbuz (yazdır → PDF) ---------- */
@@ -1172,6 +1184,387 @@
         ? `${n} yaklaşan tarih (ruhsat bitişi, takip, görev) takvime aktarılır. Her biri için bir gün önce ve o gün saat 09:00'da hatırlatma eklenir.`
         : "Takvime aktarılacak yaklaşan tarih yok.";
     }
+  };
+
+  render();
+})();
+
+
+/* Ruhsat Takip Pro — eklenti 5: dosya geçmişi, hızlı/sesli not, kurum alanı ve filtre,
+   yenileme dosyası, toplu WhatsApp. */
+(function () {
+  const style = document.createElement("style");
+  style.textContent = `
+    .hist{margin:8px 0}
+    .hist summary{font-size:.9rem;cursor:pointer}
+    .hist-input{flex:1;min-width:0;padding:8px}
+    #noteText{min-height:70px;width:100%;box-sizing:border-box}
+    #bulkDlg{width:min(94vw,520px);max-height:88vh;border:0;border-radius:16px;padding:16px}
+    #bulkDlg::backdrop{background:rgba(0,0,0,.4)}
+  `;
+  document.head.appendChild(style);
+
+  /* ---------- Yardımcılar ---------- */
+  const pad = n => String(n).padStart(2, "0");
+  const ymdLocal = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  const fmtDate = s => (s ? String(s).slice(0, 10).split("-").reverse().join(".") : "");
+  const sum = (arr, fn) => arr.reduce((a, x) => a + (Number(fn(x)) || 0), 0);
+  const paidFor = f => sum(db.transactions.filter(t => t.kind === "Tahsilat" && t.file_id === f.id), t => t.amount);
+  const leftFor = f => Math.max(0, (Number(f.fee) || 0) - paidFor(f));
+  const missingDocs = f => (f.checklist || []).filter(x => !x.done).map(x => x.title);
+
+  function daysUntil(s) {
+    if (!s) return null;
+    const [y, m, d] = String(s).slice(0, 10).split("-").map(Number);
+    const n = new Date();
+    const diff = Math.round((new Date(y, m - 1, d) - new Date(n.getFullYear(), n.getMonth(), n.getDate())) / 86400000);
+    return Number.isNaN(diff) ? null : diff;
+  }
+
+  function phoneDigits(p) {
+    let d = String(p || "").replace(/\D/g, "");
+    if (!d) return "";
+    if (d.startsWith("00")) d = d.slice(2);
+    else if (d.startsWith("0")) d = "90" + d.slice(1);
+    else if (d.length === 10) d = "90" + d;
+    return d;
+  }
+
+  /* ---------- Form alanları: kurum, başvuru no, yenileme ---------- */
+  const _upsert = upsert;
+  upsert = function (table, obj) {
+    if (table === "files") {
+      const el = $("#recordForm").elements;
+      const old = db.files.find(x => x.id === obj.id);
+      obj.institution = el["institution"]?.value || "";
+      obj.app_no = el["app_no"]?.value || "";
+      obj.repeat_years = Number(el["repeat_years"]?.value) || null;
+      obj.history = old?.history || [];
+      obj.renewed_to = old?.renewed_to || null;
+    }
+    return _upsert(table, obj);
+  };
+
+  const _openForm = openForm;
+  openForm = function (mode, id) {
+    _openForm(mode, id);
+    if (mode !== "file") return;
+
+    const o = id ? db.files.find(x => x.id === id) || {} : {};
+    const html = `
+      <label>Kurum / belediye<input name="institution" value="${esc(o.institution || "")}"></label>
+      <label>Başvuru numarası<input name="app_no" value="${esc(o.app_no || "")}"></label>
+      <label>Yenileme<select name="repeat_years">${["", "1", "2", "3", "5"].map(v =>
+        `<option value="${v}" ${String(o.repeat_years || "") === v ? "selected" : ""}>${v ? v + " yılda bir" : "Tekrarlamaz"}</option>`).join("")}</select></label>`;
+
+    const box = $("#formFields .checklist-box");
+    if (box) box.insertAdjacentHTML("beforebegin", html);
+    else $("#formFields").insertAdjacentHTML("beforeend", html);
+  };
+
+  /* ---------- Dosya kartı: kurum bilgisi + geçmiş ---------- */
+  const openHist = new Set();
+
+  const _fileCard = fileCard;
+  fileCard = function (f) {
+    const h = f.history || [];
+    const info = [
+      f.institution && "Kurum: " + esc(f.institution),
+      f.app_no && "Başvuru no: " + esc(f.app_no),
+      f.repeat_years && "Yenileme: " + f.repeat_years + " yılda bir"
+    ].filter(Boolean).join(" · ");
+
+    const hist = `<details class="hist" data-fid="${f.id}" ${openHist.has(f.id) ? "open" : ""}>
+      <summary>Geçmiş (${h.length})</summary>
+      ${[...h].reverse().map((e, i) => `<div class="subline">${fmtDate(e.at)} · ${esc(e.text)} <button type="button" class="remove-check" data-hist-del="${f.id}" data-i="${h.length - 1 - i}" aria-label="Sil">×</button></div>`).join("")}
+      <div class="item-actions"><input class="hist-input" placeholder="Not ekle (ör. evrak teslim alındı)"><button type="button" class="small-btn hist-add" data-id="${f.id}">Ekle</button></div>
+    </details>`;
+
+    return _fileCard(f)
+      .replace('<article class="list-item">', () => `<article class="list-item" data-inst="${esc(f.institution || "")}">`)
+      .replace('<div class="item-actions">', () => (info ? `<div class="subline">${info}</div>` : "") + hist + '<div class="item-actions">');
+  };
+
+  document.addEventListener("click", e => {
+    const add = e.target.closest(".hist-add");
+    if (add) {
+      const text = add.parentElement.querySelector(".hist-input").value.trim();
+      const f = db.files.find(x => x.id === add.dataset.id);
+      if (f && text) {
+        f.history = [...(f.history || []), { at: new Date().toISOString(), text }];
+        openHist.add(f.id);
+        saveLocal();
+      }
+      return;
+    }
+
+    const del = e.target.closest("[data-hist-del]");
+    if (del) {
+      const f = db.files.find(x => x.id === del.dataset.histDel);
+      if (f?.history) {
+        f.history.splice(Number(del.dataset.i), 1);
+        saveLocal();
+      }
+    }
+  });
+
+  document.addEventListener("toggle", e => {
+    const d = e.target;
+    if (d.matches?.("details.hist")) {
+      if (d.open) openHist.add(d.dataset.fid);
+      else openHist.delete(d.dataset.fid);
+    }
+  }, true);
+
+  /* ---------- Kurum filtresi ---------- */
+  let inst = "";
+
+  function mountInst() {
+    if ($("#instFilter")) return;
+    const row = $(".filter-row");
+    if (!row) return;
+
+    const s = document.createElement("select");
+    s.id = "instFilter";
+    row.appendChild(s);
+    s.addEventListener("change", () => { inst = s.value; applyInst(); });
+  }
+
+  function fillInst() {
+    const s = $("#instFilter");
+    if (!s) return;
+
+    const names = [...new Set(db.files.map(f => f.institution).filter(Boolean))].sort((a, b) => a.localeCompare(b, "tr"));
+    s.innerHTML = '<option value="">Tüm kurumlar</option>' + names.map(n => `<option>${esc(n)}</option>`).join("");
+    s.value = names.includes(inst) ? inst : "";
+    inst = s.value;
+  }
+
+  function applyInst() {
+    $$("#filesList [data-inst]").forEach(a => { a.style.display = !inst || a.dataset.inst === inst ? "" : "none"; });
+  }
+
+  $("#fileSearch")?.addEventListener("input", applyInst);
+  $("#fileStatusFilter")?.addEventListener("change", applyInst);
+
+  /* ---------- Hızlı / sesli not ---------- */
+  function mountNote() {
+    if ($("#noteCard")) return;
+    const grid = $("#view-home .metric-grid");
+    if (!grid) return;
+
+    const c = document.createElement("div");
+    c.id = "noteCard";
+    c.className = "card";
+    c.innerHTML = `<h2>Hızlı not</h2>
+      <textarea id="noteText" placeholder="Notunu yaz ya da klavyedeki mikrofonla söyle"></textarea>
+      <label>Dosya (isteğe bağlı)<select id="noteFile"></select></label>
+      <div class="item-actions">
+        <button type="button" class="small-btn" id="noteSave">Kaydet</button>
+        <button type="button" class="small-btn" id="noteMic" hidden>Sesle yaz</button>
+      </div>`;
+    grid.after(c);
+
+    $("#noteSave").addEventListener("click", () => {
+      const text = $("#noteText").value.trim();
+      if (!text) return;
+
+      const f = db.files.find(x => x.id === $("#noteFile").value);
+      const now = new Date().toISOString();
+
+      if (f) {
+        f.history = [...(f.history || []), { at: now, text }];
+        openHist.add(f.id);
+      } else {
+        db.tasks.push({
+          id: crypto.randomUUID(),
+          title: text.slice(0, 80),
+          file_id: null,
+          due_date: null,
+          done: false,
+          notes: text.length > 80 ? text : "",
+          created_at: now
+        });
+      }
+
+      $("#noteText").value = "";
+      saveLocal();
+      toast(f ? "Not dosya geçmişine eklendi." : "Not görev olarak eklendi.");
+    });
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      $("#noteMic").hidden = false;
+      $("#noteMic").addEventListener("click", () => {
+        const r = new SR();
+        r.lang = "tr-TR";
+        r.onresult = ev => {
+          const t = ev.results[0][0].transcript;
+          $("#noteText").value = ($("#noteText").value + " " + t).trim();
+        };
+        r.onerror = () => toast("Ses algılanamadı.");
+        r.start();
+      });
+    }
+  }
+
+  function fillNoteFiles() {
+    const s = $("#noteFile");
+    if (!s) return;
+    const v = s.value;
+    s.innerHTML = '<option value="">Genel görev olarak ekle</option>' +
+      db.files.map(f => `<option value="${f.id}">${esc(f.title)}</option>`).join("");
+    s.value = v;
+  }
+
+  /* ---------- Yenileme dosyası ---------- */
+  const renewals = () => db.files.filter(f =>
+    f.repeat_years > 0 && f.expiry_date && !f.renewed_to && (daysUntil(f.expiry_date) ?? 999) <= 60);
+
+  function makeRenewal(f) {
+    const [Y, M, D] = f.expiry_date.split("-").map(Number);
+    const follow = new Date(Math.max(Date.now(), new Date(Y, M - 1, D - 30).getTime()));
+    const now = new Date().toISOString();
+    const nid = crypto.randomUUID();
+
+    db.files.push({
+      ...f,
+      id: nid,
+      title: f.title.replace(/ \(yenileme\)$/, "") + " (yenileme)",
+      status: "Yeni başvuru",
+      expiry_date: `${Y + f.repeat_years}-${pad(M)}-${pad(D)}`,
+      due_date: ymdLocal(follow),
+      checklist: (f.checklist || []).map(x => ({ title: x.title, done: false })),
+      history: [{ at: now, text: "Yenileme dosyası açıldı" }],
+      renewed_to: null,
+      app_no: "",
+      created_at: now
+    });
+
+    f.renewed_to = nid;
+    saveLocal();
+    toast("Yenileme dosyası açıldı.");
+  }
+
+  function renderRenew() {
+    let box = $("#renewBox");
+
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "renewBox";
+      box.className = "card";
+      const a = $("#autoAlerts2Home");
+      if (a) a.after(box);
+      else $("#upcomingList")?.closest(".card")?.before(box);
+    }
+
+    const list = renewals();
+    box.style.display = list.length ? "" : "none";
+    box.innerHTML = list.length
+      ? `<div class="section-head"><h2>Yenileme zamanı</h2></div><div class="list">${list.map(f => `<article class="list-item">
+          <div class="list-title">${esc(f.title)}</div>
+          <div class="subline">Ruhsat bitişi: ${fmtDate(f.expiry_date)}</div>
+          <div class="item-actions"><button class="small-btn renew-btn" data-id="${f.id}">Yenileme dosyasını aç</button></div>
+        </article>`).join("")}</div>`
+      : "";
+  }
+
+  document.addEventListener("click", e => {
+    const b = e.target.closest(".renew-btn");
+    const f = b && db.files.find(x => x.id === b.dataset.id);
+    if (f) makeRenewal(f);
+  });
+
+  /* ---------- Toplu WhatsApp ---------- */
+  const AUD = {
+    expiring: {
+      label: "Süresi yaklaşan ruhsatlar",
+      test: f => { const d = daysUntil(f.expiry_date); return d !== null && d <= 30; },
+      msg: (f, c) => daysUntil(f.expiry_date) < 0
+        ? `Merhaba ${c.name}, ${f.title} ruhsatınızın süresi ${fmtDate(f.expiry_date)} tarihinde doldu. Yenileme için dönüş yapar mısınız?`
+        : `Merhaba ${c.name}, ${f.title} ruhsatınızın süresi ${fmtDate(f.expiry_date)} tarihinde doluyor. Yenileme işlemleri için dönüş yapar mısınız?`
+    },
+    debt: {
+      label: "Borcu olanlar",
+      test: f => leftFor(f) > 0,
+      msg: (f, c) => `Merhaba ${c.name}, ${f.title} dosyanız için kalan hizmet bedeli ${money(leftFor(f))}. Uygun olduğunuzda ödeme yapabilirseniz sevinirim.`
+    },
+    docs: {
+      label: "Eksik evrakı olanlar",
+      test: f => f.status !== "Tamamlandı" && missingDocs(f).length > 0,
+      msg: (f, c) => `Merhaba ${c.name}, ${f.title} dosyanız için eksik evraklar: ${missingDocs(f).join(", ")}. Hazır olunca iletebilir misiniz?`
+    }
+  };
+
+  const sent = new Set();
+  const bulk = document.createElement("dialog");
+  bulk.id = "bulkDlg";
+  document.body.appendChild(bulk);
+
+  function renderBulk(aud = "expiring") {
+    const a = AUD[aud];
+    const rows = db.files.filter(a.test).map(f => ({ f, c: db.clients.find(x => x.id === f.client_id) }));
+    const withPhone = rows.filter(r => phoneDigits(r.c?.phone));
+
+    bulk.innerHTML = `
+      <div class="dialog-head"><h2>Toplu WhatsApp</h2><button type="button" class="icon-btn bulk-close" aria-label="Kapat">×</button></div>
+      <label>Kime<select id="bulkAud">${Object.entries(AUD).map(([k, v]) => `<option value="${k}" ${k === aud ? "selected" : ""}>${v.label}</option>`).join("")}</select></label>
+      <p class="subline">${withPhone.length} kişiye mesaj hazır${rows.length > withPhone.length ? `, ${rows.length - withPhone.length} dosyada müşteri veya telefon eksik` : ""}. Her mesajı tek tek gönderirsin.</p>
+      <div class="list">${withPhone.map(({ f, c }) => {
+        const key = aud + f.id;
+        const href = `https://wa.me/${phoneDigits(c.phone)}?text=${encodeURIComponent(a.msg(f, c))}`;
+        return `<article class="list-item">
+          <div class="list-title">${esc(c.name)}</div>
+          <div class="subline">${esc(f.title)}</div>
+          <div class="item-actions"><a class="small-btn wa bulk-send" data-key="${key}" href="${href}" target="_blank" rel="noopener">${sent.has(key) ? "Tekrar gönder" : "Gönder"}</a>${sent.has(key) ? "<span class='subline'>✓ gönderildi</span>" : ""}</div>
+        </article>`;
+      }).join("")}</div>`;
+  }
+
+  bulk.addEventListener("click", e => {
+    if (e.target === bulk || e.target.closest(".bulk-close")) bulk.close();
+
+    const s = e.target.closest(".bulk-send");
+    if (s) {
+      sent.add(s.dataset.key);
+      setTimeout(() => renderBulk($("#bulkAud").value), 400);
+    }
+  });
+
+  bulk.addEventListener("change", e => {
+    if (e.target.id === "bulkAud") renderBulk(e.target.value);
+  });
+
+  function mountBulk() {
+    if ($("#bulkCard")) return;
+    const view = $("#view-tasks");
+    if (!view) return;
+
+    const card = document.createElement("div");
+    card.id = "bulkCard";
+    card.className = "card";
+    card.innerHTML = `<h2>Toplu WhatsApp</h2>
+      <p class="subline">Süresi yaklaşan, borcu veya eksik evrakı olan müşteriler için mesajları sırayla hazırlar.</p>
+      <div class="item-actions"><button type="button" class="small-btn" id="bulkOpen">Mesajları hazırla</button></div>`;
+
+    const anchor = $("#calCard");
+    if (anchor) anchor.before(card);
+    else view.appendChild(card);
+
+    $("#bulkOpen").addEventListener("click", () => { renderBulk(); bulk.showModal(); });
+  }
+
+  /* ---------- Render bağlama ---------- */
+  const _render = render;
+  render = function () {
+    _render();
+    mountNote();
+    fillNoteFiles();
+    mountInst();
+    fillInst();
+    applyInst();
+    renderRenew();
+    mountBulk();
   };
 
   render();
