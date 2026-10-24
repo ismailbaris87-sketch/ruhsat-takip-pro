@@ -1571,3 +1571,75 @@
 })();
 
 
+/* Ruhsat Takip Pro — eklenti 6: tutarlı bakiye, tahsilatta dosya seçimi, tarih biçimi. */
+(function () {
+  const sum = (arr, fn) => arr.reduce((a, x) => a + (Number(fn(x)) || 0), 0);
+  const paidFor = f => sum(db.transactions.filter(t => t.kind === "Tahsilat" && t.file_id === f.id), t => t.amount);
+  const leftFor = f => Math.max(0, (Number(f.fee) || 0) - paidFor(f));
+
+  /* Özet ve Finans'taki "kalan" artık dosya kartlarıyla aynı hesaptan gelir */
+  function fixTotals() {
+    const due = db.files.reduce((a, f) => a + leftFor(f), 0);
+
+    ["#metricDue", "#moneyReceivable"].forEach(s => {
+      if ($(s)) $(s).textContent = money(due);
+    });
+
+    const unbound = sum(
+      db.transactions.filter(t => t.kind === "Tahsilat" && !db.files.some(f => f.id === t.file_id)),
+      t => t.amount
+    );
+
+    let box = $("#unboundBox");
+    if (!box) {
+      const anchor = $("#transactionsList")?.closest(".card");
+      if (!anchor) return;
+      box = document.createElement("div");
+      box.id = "unboundBox";
+      box.className = "card";
+      anchor.before(box);
+    }
+
+    box.style.display = unbound ? "" : "none";
+    box.innerHTML = unbound
+      ? `<h2>Dosyaya bağlanmamış tahsilat</h2>
+         <p class="subline">${money(unbound)} tutarındaki tahsilat bir dosyaya bağlı değil, bu yüzden dosya bakiyelerine yansımıyor. İşlemi düzenleyip dosyayı seç.</p>`
+      : "";
+  }
+
+  /* Tahsilat girerken dosya seçimi zorunlu */
+  const _openForm = openForm;
+  openForm = function (mode, id) {
+    _openForm(mode, id);
+    if (mode !== "transaction") return;
+
+    const kind = $('#formFields select[name="kind"]');
+    const file = $('#formFields select[name="file_id"]');
+    if (!kind || !file) return;
+
+    const sync = () => {
+      const need = kind.value === "Tahsilat";
+      file.required = need;
+      file.options[0].textContent = need ? "Dosya seç (zorunlu)" : "Dosya seç (isteğe bağlı)";
+    };
+
+    kind.addEventListener("change", sync);
+    sync();
+  };
+
+  /* Takip tarihi: 31.10.2026 biçimi */
+  const _fileCard = fileCard;
+  fileCard = function (f) {
+    return _fileCard(f).replace(/Takip tarihi: (\d{4})-(\d{2})-(\d{2})/, "Takip tarihi: $3.$2.$1");
+  };
+
+  const _render = render;
+  render = function () {
+    _render();
+    fixTotals();
+  };
+
+  render();
+})();
+
+
