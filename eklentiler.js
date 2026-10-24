@@ -1643,3 +1643,66 @@
 })();
 
 
+/* Ruhsat Takip Pro — eklenti 7: bulut hesabı kartını giriş yapılınca gizler,
+   hesap simgesine basınca açar; eşitleme hatasında kartı kendiliğinden açar. */
+(function () {
+  const panel = $("#authPanel");
+  const btn = $("#accountBtn");
+  if (!panel || !btn) return;
+
+  let manual = false;
+  let booting = false;
+
+  try {
+    booting = !!JSON.parse(localStorage.getItem("rtp_supabase_config") || "{}").url;
+  } catch {}
+
+  function sync() {
+    const show = manual || (!sessionUser && !booting);
+    panel.style.display = show ? "" : "none";
+  }
+
+  function setIcon() {
+    const status = ($("#cloudStatus")?.textContent || "").toLowerCase();
+
+    if (status.includes("hata") || status.includes("başarısız")) {
+      btn.textContent = "⚠";
+      manual = true;
+    } else if (sessionUser) {
+      btn.textContent = "☁";
+    } else {
+      btn.textContent = "☻";
+    }
+
+    sync();
+  }
+
+  btn.addEventListener("click", () => {
+    manual = !manual;
+    sync();
+    if (manual) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  const signOut = $("#signOut");
+  if (signOut) {
+    new MutationObserver(() => {
+      if (sessionUser) manual = false;
+      setIcon();
+    }).observe(signOut, { attributes: true, attributeFilter: ["hidden"] });
+  }
+
+  const status = $("#cloudStatus");
+  if (status) {
+    new MutationObserver(setIcon).observe(status, { childList: true, characterData: true, subtree: true });
+  }
+
+  /* oturum denetimi bitince, giriş yoksa kartı göster */
+  setTimeout(() => {
+    booting = false;
+    setIcon();
+  }, 3000);
+
+  sync();
+})();
+
+
